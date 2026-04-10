@@ -262,7 +262,125 @@ rm -f src/turtlebot3_drl/model/docker-desktop/_ddpg_training_comparison.txt
 
 Sau do chay lai quy trinh train tu dau.
 
-## 12. Loi thuong gap
+## 12. Utilities
+
+### Ve do thi reward
+
+Repo co script `reward_graph.py` trong thu muc `util` de so sanh ket qua giua cac model.
+
+Vi du so sanh duong reward cua `ddpg_0` va `td3_0` cu 100 episode:
+
+```bash
+python3 util/reward_graph.py 100 examples/ddpg_0 examples/td3_0
+```
+
+Luu y:
+
+- voi model cua chinh ban, khong can them tien to `examples/`
+- viec ve graph se dung tot nhat khi qua trinh train khong bi dung roi resume
+- neu ban da dung va train tiep nhieu lan, can gop cac file `_train_stage*.txt` thanh mot file truoc khi ve graph
+
+### Don dep du lieu model
+
+Train lau co the tao ra rat nhieu checkpoint va file log, nen repo co them script de giai phong dung luong.
+
+Can than:
+
+- cac lenh nay co the xoa du lieu vinh vien
+- truoc khi chay, can doc ky tham so trong script
+
+De don dep mot model:
+
+```bash
+python3 util/clean_single_model.py ddpg_0
+```
+
+Script nay se giu lai:
+
+- 4 episode co hieu suat tot nhat
+- episode moi nhat
+
+Neu muon thay doi so checkpoint duoc giu lai, sua bien `TOP_EPISODES` trong script.
+
+De don dep tat ca model:
+
+```bash
+python3 util/purge_all_models.py
+```
+
+Script nay se:
+
+- duyet qua tat ca model
+- giu lai cac checkpoint quan trong
+- xoa hoan toan cac model qua yeu hoac train qua it episode, dua tren nguong cau hinh trong `purge_all_models.py`
+
+## 13. Visualization
+
+Neu muon bat che do visualize hoat dong cua neural network, sua trong `settings.py`:
+
+```python
+ENABLE_VISUAL = True
+```
+
+Che do nay can cac goi Python:
+
+- `pyqtgraph`
+- `PyQt5`
+
+Luu y:
+
+- nen dung visualization khi evaluate/test
+- khong nen dung khi train lau vi co the lam cham qua trinh train
+
+## 14. Command Specification
+
+### `train_agent`
+
+Cu phap:
+
+```bash
+ros2 run turtlebot3_drl train_agent [algorithm=dqn/ddpg/td3] [loadmodel=path_to_model] [loadepisode=episode]
+```
+
+Y nghia:
+
+- `algorithm`: thuat toan su dung, mot trong `dqn`, `ddpg`, `td3`
+- `modelpath`: duong dan hoac ten model can load de train tiep
+- `loadepisode`: episode can load tu model do
+
+Vi du train moi:
+
+```bash
+ros2 run turtlebot3_drl train_agent ddpg
+```
+
+Vi du train tiep tu checkpoint:
+
+```bash
+ros2 run turtlebot3_drl train_agent ddpg "ddpg_0_stage_4" 500
+```
+
+### `test_agent`
+
+Cu phap:
+
+```bash
+ros2 run turtlebot3_drl test_agent [algorithm=dqn/ddpg/td3] [loadmodel=path_to_model] [loadepisode=episode]
+```
+
+Y nghia:
+
+- `algorithm`: thuat toan su dung, mot trong `dqn`, `ddpg`, `td3`
+- `modelpath`: duong dan hoac ten model can load de test
+- `loadepisode`: episode can load tu model do
+
+Vi du:
+
+```bash
+ros2 run turtlebot3_drl test_agent ddpg "ddpg_0_stage_4" 500
+```
+
+## 15. Loi thuong gap
 
 ### Loi khong tim thay `/tmp/drlnav_current_stage.txt`
 
@@ -287,7 +405,7 @@ Khac phuc:
 May cua ban dang dung AMD, nen `torch.cuda.is_available()` co the la `False`.
 Dieu nay co nghia la model dang train bang CPU, van chay duoc nhung cham hon.
 
-## 13. Quy trinh ngan gon de dung lai moi lan
+## 16. Quy trinh ngan gon de dung lai moi lan
 
 ### Train tu dau
 
