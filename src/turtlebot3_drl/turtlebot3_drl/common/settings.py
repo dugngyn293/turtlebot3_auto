@@ -1,3 +1,6 @@
+import os
+
+
 # ===================================================================== #
 #                           GENERAL SETTINGS                            #
 # ===================================================================== #
@@ -7,6 +10,11 @@ ENABLE_STACKING          = False    # Enable processing multiple consecutive sca
 ENABLE_VISUAL            = False    # Meant to be used only during evaluation/testing phase
 ENABLE_TRUE_RANDOM_GOALS = False    # If false, goals are selected semi-randomly from a list of known valid goal positions
 ENABLE_DYNAMIC_GOALS     = False    # If true, goal difficulty (distance) is adapted according to current success rate
+ENABLE_BEV_STATE         = True     # If true, DRL environment returns a BEV image state instead of LiDAR samples
+BEV_IMAGE_SIZE           = 64       # Width and height of the square BEV image passed to DreamerV3
+BEV_MEDIA_DIR            = os.path.join(os.getenv('DRLNAV_BASE_PATH', os.getcwd()), 'media')
+BEV_STEP_IMAGE_PATH      = os.path.join(BEV_MEDIA_DIR, 'turtlebot3_drl_bev_latest_step.png')
+BEV_BATCH_IMAGE_PATH     = os.path.join(BEV_MEDIA_DIR, 'turtlebot3_drl_bev_latest_batch.png')
 MODEL_STORE_INTERVAL     = 100      # Store the model weights every N episodes
 GRAPH_DRAW_INTERVAL      = 10       # Draw the graph every N episodes (drawing too often will slow down training)
 GRAPH_AVERAGE_REWARD     = 10       # Average the reward graph over every N episodes

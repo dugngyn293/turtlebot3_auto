@@ -34,9 +34,11 @@ from rclpy.qos import QoSProfile, qos_profile_sensor_data
 
 from . import reward as rw
 from ..common import utilities as util
+from ..common.bev import BEVRenderer
 from ..common.settings import ENABLE_BACKWARD, EPISODE_TIMEOUT_SECONDS, ENABLE_MOTOR_NOISE, UNKNOWN, SUCCESS, COLLISION_WALL, COLLISION_OBSTACLE, TIMEOUT, TUMBLE, \
                                 TOPIC_SCAN, TOPIC_VELO, TOPIC_ODOM, ARENA_LENGTH, ARENA_WIDTH, MAX_NUMBER_OBSTACLES, OBSTACLE_RADIUS, LIDAR_DISTANCE_CAP, \
-                                    SPEED_LINEAR_MAX, SPEED_ANGULAR_MAX, THRESHOLD_COLLISION, THREHSOLD_GOAL, ENABLE_DYNAMIC_GOALS
+                                    SPEED_LINEAR_MAX, SPEED_ANGULAR_MAX, THRESHOLD_COLLISION, THREHSOLD_GOAL, ENABLE_DYNAMIC_GOALS, ENABLE_BEV_STATE, \
+                                    BEV_IMAGE_SIZE, BEV_STEP_IMAGE_PATH
 
 # Automatically retrievew from Gazebo model configuration (40 by default).
 # Can be set manually if needed.
@@ -71,6 +73,7 @@ class DRLEnvironment(Node):
         self.clock_msgs_skipped = 0
 
         self.obstacle_distances = [Infinity] * MAX_NUMBER_OBSTACLES
+        self.obstacle_positions = [None] * MAX_NUMBER_OBSTACLES
 
         self.new_goal = False
         self.goal_angle = 0.0
@@ -79,6 +82,7 @@ class DRLEnvironment(Node):
 
         self.scan_ranges = [LIDAR_DISTANCE_CAP] * NUM_SCAN_SAMPLES
         self.obstacle_distance = LIDAR_DISTANCE_CAP
+        self.bev_renderer = BEVRenderer(BEV_IMAGE_SIZE, ARENA_LENGTH, ARENA_WIDTH)
 
         self.difficulty_radius = 1
         self.local_step = 0
@@ -125,6 +129,7 @@ class DRLEnvironment(Node):
             diff_x = self.robot_x - robot_pos.x
             diff_y = self.robot_y - robot_pos.y
             self.obstacle_distances[obstacle_id] = math.sqrt(diff_y**2 + diff_x**2)
+            self.obstacle_positions[obstacle_id] = (robot_pos.x, robot_pos.y)
         else:
             print("ERROR: received odom was not from obstacle!")
 
@@ -201,11 +206,23 @@ class DRLEnvironment(Node):
             self.task_fail_client.call_async(req)
 
     def get_state(self, action_linear_previous, action_angular_previous):
-        state = copy.deepcopy(self.scan_ranges)                                             # range: [ 0, 1]
-        state.append(float(numpy.clip((self.goal_distance / MAX_GOAL_DISTANCE), 0, 1)))     # range: [ 0, 1]
-        state.append(float(self.goal_angle) / math.pi)                                      # range: [-1, 1]
-        state.append(float(action_linear_previous))                                         # range: [-1, 1]
-        state.append(float(action_angular_previous))                                        # range: [-1, 1]
+        if ENABLE_BEV_STATE:
+            image = self.bev_renderer.render(
+                self.robot_x,
+                self.robot_y,
+                self.robot_heading,
+                self.goal_x,
+                self.goal_y,
+                self.obstacle_positions,
+            )
+            self.bev_renderer.save_png(BEV_STEP_IMAGE_PATH, image)
+            state = self.bev_renderer.flatten(image)
+        else:
+            state = copy.deepcopy(self.scan_ranges)                                             # range: [ 0, 1]
+            state.append(float(numpy.clip((self.goal_distance / MAX_GOAL_DISTANCE), 0, 1)))     # range: [ 0, 1]
+            state.append(float(self.goal_angle) / math.pi)                                      # range: [-1, 1]
+            state.append(float(action_linear_previous))                                         # range: [-1, 1]
+            state.append(float(action_angular_previous))                                        # range: [-1, 1]
         self.local_step += 1
 
         if self.local_step <= 30: # Grace period to wait for simulation reset

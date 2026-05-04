@@ -1,10 +1,11 @@
-import math
 import numpy as np
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from ..common.bev import save_png
+from ..common.settings import BEV_BATCH_IMAGE_PATH, BEV_IMAGE_SIZE
 from .off_policy_agent import OffPolicyAgent, Network
 
 
@@ -70,23 +71,22 @@ class ReturnNormalizer:
 
 
 class CnnEncoder(Network):
-    def __init__(self, name, state_size, action_size, hidden_size, embed_size=256):
+    def __init__(self, name, state_size, action_size, hidden_size, embed_size=256, image_size=64, image_channels=3):
         super().__init__(name)
-        self.scan_size = state_size - 4
+        self.image_size = image_size
+        self.image_channels = image_channels
         self.conv = nn.Sequential(
-            nn.Conv1d(1, 16, kernel_size=5, stride=2, padding=2),
+            nn.Conv2d(image_channels, 32, kernel_size=4, stride=2, padding=1),
             nn.ELU(),
-            nn.Conv1d(16, 32, kernel_size=5, stride=2, padding=2),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
             nn.ELU(),
-            nn.AdaptiveAvgPool1d(16),
+            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
+            nn.ELU(),
+            nn.AdaptiveAvgPool2d((4, 4)),
             nn.Flatten(),
         )
-        self.proprio = nn.Sequential(
-            nn.Linear(4, hidden_size // 4),
-            nn.ELU(),
-        )
         self.fc = nn.Sequential(
-            nn.Linear(32 * 16 + hidden_size // 4, hidden_size),
+            nn.Linear(128 * 4 * 4, hidden_size),
             nn.ELU(),
             nn.Linear(hidden_size, embed_size),
             nn.ELU(),
@@ -95,47 +95,43 @@ class CnnEncoder(Network):
 
     def forward(self, states):
         original_shape = states.shape[:-1]
-        states = states.reshape(-1, states.shape[-1])
-        scan = states[:, :self.scan_size].unsqueeze(1)
-        aux = states[:, self.scan_size:]
-        embed = self.fc(torch.cat((self.conv(scan), self.proprio(aux)), dim=-1))
+        images = states.reshape(-1, self.image_size, self.image_size, self.image_channels)
+        images = images.permute(0, 3, 1, 2)
+        embed = self.fc(self.conv(images))
         return embed.reshape(*original_shape, -1)
 
 
 class CnnDecoder(Network):
-    def __init__(self, name, latent_size, state_size, hidden_size):
+    def __init__(self, name, latent_size, state_size, hidden_size, image_size=64, image_channels=3):
         super().__init__(name)
-        self.scan_size = state_size - 4
-        self.seed_size = max(8, math.ceil(self.scan_size / 4))
+        self.image_size = image_size
+        self.image_channels = image_channels
         self.fc = nn.Sequential(
             nn.Linear(latent_size, hidden_size),
             nn.ELU(),
-            nn.Linear(hidden_size, 32 * self.seed_size),
+            nn.Linear(hidden_size, 128 * 4 * 4),
             nn.ELU(),
         )
         self.deconv = nn.Sequential(
-            nn.ConvTranspose1d(32, 16, kernel_size=5, stride=2, padding=2, output_padding=1),
+            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),
             nn.ELU(),
-            nn.ConvTranspose1d(16, 1, kernel_size=5, stride=2, padding=2, output_padding=1),
-        )
-        self.aux = nn.Sequential(
-            nn.Linear(latent_size, hidden_size),
+            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),
             nn.ELU(),
-            nn.Linear(hidden_size, 4),
+            nn.ConvTranspose2d(32, image_channels, kernel_size=4, stride=2, padding=1),
         )
         self.apply(super().init_weights)
 
     def forward(self, latents):
         original_shape = latents.shape[:-1]
         latents = latents.reshape(-1, latents.shape[-1])
-        scan_seed = self.fc(latents).reshape(-1, 32, self.seed_size)
-        scan = self.deconv(scan_seed).squeeze(1)
-        scan = F.interpolate(scan.unsqueeze(1), size=self.scan_size, mode='linear', align_corners=False).squeeze(1)
-        aux = self.aux(latents)
-        return torch.cat((scan, aux), dim=-1).reshape(*original_shape, -1)
+        image_seed = self.fc(latents).reshape(-1, 128, 4, 4)
+        images = self.deconv(image_seed)
+        images = F.interpolate(images, size=(self.image_size, self.image_size), mode='bilinear', align_corners=False)
+        images = torch.sigmoid(images).permute(0, 2, 3, 1)
+        return images.reshape(*original_shape, -1)
 
     def loss(self, latents, states):
-        return F.mse_loss(self(latents), symlog(states))
+        return F.mse_loss(self(latents), states)
 
 
 class RSSM(Network):
@@ -172,6 +168,9 @@ class RSSM(Network):
 
     def _dist(self, logits):
         return unimix(logits.reshape(-1, self.stoch_size, self.classes))
+
+    def forward(self, h, z, action):
+        return self.imagine_step(h, z, action)
 
     def observe_step(self, h, z, action, embed):
         h = self.gru(torch.cat((z.reshape(z.shape[0], -1), action), dim=-1), h)
@@ -309,6 +308,10 @@ class DreamerV3(OffPolicyAgent):
     def __init__(self, device, sim_speed):
         super().__init__(device, sim_speed)
 
+        self.image_size = BEV_IMAGE_SIZE
+        self.image_channels = 3
+        self.state_size = self.image_size * self.image_size * self.image_channels
+        self.input_size = self.state_size
         self.sequence_length = 16
         self.horizon = 15
         self.embed_size = 256
@@ -325,9 +328,24 @@ class DreamerV3(OffPolicyAgent):
         self.world_lr = 1e-4
 
         self.bins = torch.linspace(-20.0, 20.0, self.num_bins, device=self.device)
-        self.encoder = CnnEncoder('encoder', self.input_size, self.action_size, self.hidden_size, self.embed_size).to(self.device)
+        self.encoder = CnnEncoder(
+            'encoder',
+            self.input_size,
+            self.action_size,
+            self.hidden_size,
+            self.embed_size,
+            self.image_size,
+            self.image_channels,
+        ).to(self.device)
         self.rssm = RSSM('rssm', self.embed_size, self.action_size, self.hidden_size, self.deter_size, self.stoch_size, self.stoch_classes).to(self.device)
-        self.decoder = CnnDecoder('decoder', self.rssm.latent_size, self.input_size, self.hidden_size).to(self.device)
+        self.decoder = CnnDecoder(
+            'decoder',
+            self.rssm.latent_size,
+            self.input_size,
+            self.hidden_size,
+            self.image_size,
+            self.image_channels,
+        ).to(self.device)
         self.reward_head = RewardHead('reward_head', self.rssm.latent_size, self.hidden_size, self.num_bins).to(self.device)
         self.continue_head = ContinueHead('continue_head', self.rssm.latent_size, self.hidden_size).to(self.device)
         self.actor = Actor('actor', self.rssm.latent_size, self.action_size, self.hidden_size).to(self.device)
@@ -398,6 +416,7 @@ class DreamerV3(OffPolicyAgent):
             return [0.0, 0.0]
 
         obs, actions, rewards, next_obs, dones = batch
+        self._save_latest_batch_image(next_obs)
         obs = torch.from_numpy(next_obs).to(self.device)
         actions = torch.from_numpy(actions).to(self.device)
         rewards = torch.from_numpy(rewards).to(self.device)
@@ -499,9 +518,15 @@ class DreamerV3(OffPolicyAgent):
         z = z_states.reshape(batch_size * sequence_length, self.stoch_size, self.stoch_classes)
         return self.rssm.get_latent(h, z).reshape(batch_size, sequence_length, -1)
 
+    def _save_latest_batch_image(self, batch_states):
+        image = batch_states[0, -1].reshape(self.image_size, self.image_size, self.image_channels)
+        save_png(BEV_BATCH_IMAGE_PATH, np.clip(image * 255.0, 0, 255).astype(np.uint8))
+
     def get_model_parameters(self):
         base = super().get_model_parameters()
         dreamer = [
+            self.image_size,
+            self.image_channels,
             self.sequence_length,
             self.horizon,
             self.embed_size,

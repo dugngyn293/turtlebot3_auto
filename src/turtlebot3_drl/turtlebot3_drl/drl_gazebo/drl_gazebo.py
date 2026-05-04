@@ -32,8 +32,7 @@ from rclpy.node import Node
 
 from turtlebot3_msgs.srv import RingGoal
 import xml.etree.ElementTree as ET
-from ..drl_environment.drl_environment import ARENA_LENGTH, ARENA_WIDTH, ENABLE_DYNAMIC_GOALS
-from ..common.settings import ENABLE_TRUE_RANDOM_GOALS
+from ..common.settings import ARENA_LENGTH, ARENA_WIDTH, ENABLE_DYNAMIC_GOALS, ENABLE_TRUE_RANDOM_GOALS
 
 NO_GOAL_SPAWN_MARGIN = 0.3 # meters away from any wall
 class DRLGazebo(Node):
@@ -44,9 +43,10 @@ class DRLGazebo(Node):
         ** Initialise variables
         ************************************************************"""
 
-        self.entity_dir_path = (os.path.dirname(os.path.realpath(__file__))).replace(
-            'turtlebot3_drl/lib/python3.8/site-packages/turtlebot3_drl/drl_gazebo',
-            'turtlebot3_gazebo/share/turtlebot3_gazebo/models/turtlebot3_drl_world/goal_box')
+        self.entity_dir_path = os.path.join(
+            os.getenv('DRLNAV_BASE_PATH', '/home/turtlebot3_drlnav'),
+            'src/turtlebot3_simulations/turtlebot3_gazebo/models/turtlebot3_drl_world/goal_box',
+        )
         self.entity_path = os.path.join(self.entity_dir_path, 'model.sdf')
         self.entity = open(self.entity_path, 'r').read()
         self.entity_name = 'goal'
