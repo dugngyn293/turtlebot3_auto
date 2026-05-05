@@ -112,3 +112,35 @@ COLLISION_OBSTACLE = 3
 TIMEOUT = 4
 TUMBLE = 5
 RESULTS_NUM = 6
+
+
+# ===================================================================== #
+#                        DREAMERV3 SETTINGS                             #
+# ===================================================================== #
+# World model architecture
+DREAMER_EMBED_SIZE          = 256       # CNN encoder output dimensionality
+DREAMER_DETER_SIZE          = 256       # GRU deterministic state size
+DREAMER_STOCH_SIZE          = 16        # Number of categorical latent variables
+DREAMER_STOCH_CLASSES       = 16        # Classes per categorical variable (total: 16×16=256)
+DREAMER_HIDDEN_SIZE         = 256       # MLP hidden layer width (all heads)
+DREAMER_NUM_BINS            = 255       # Twohot bins for reward/value heads
+
+# World model training
+DREAMER_SEQUENCE_LENGTH     = 16        # RSSM unroll length per training batch
+DREAMER_FREE_BITS           = 1.0       # Min KL per variable (prevents KL collapse)
+DREAMER_KL_COEF             = 0.5       # Weight on KL loss term
+DREAMER_WORLD_LR            = 1e-4      # World model Adam learning rate
+DREAMER_GRAD_CLIP           = 10.0      # Gradient norm clipping threshold
+
+# Actor-critic (behaviour learning in imagination)
+DREAMER_HORIZON             = 15        # Imagination roll-out steps
+DREAMER_LAMBDA              = 0.95      # GAE lambda for λ-returns
+DREAMER_ENTROPY_COEF        = 3e-4      # Entropy bonus coefficient
+DREAMER_ACTOR_LR            = 3e-5      # Actor Adam learning rate
+DREAMER_CRITIC_LR           = 3e-5      # Critic Adam learning rate
+DREAMER_CRITIC_EMA          = 0.02      # EMA coefficient for target critic
+
+# Observation / explore
+DREAMER_OBSERVE_STEPS       = 5000      # Random-action warm-up steps before training
+                                        # (lower than OBSERVE_STEPS — DreamerV3 is
+                                        #  more sample-efficient)

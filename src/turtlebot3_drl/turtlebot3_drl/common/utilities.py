@@ -66,6 +66,7 @@ def get_goal_status(agent_self):
 
 def wait_new_goal(agent_self):
     while(get_goal_status(agent_self) == False):
+        pause_simulation(agent_self, agent_self.real_robot)
         print("Waiting for new goal... (if persists: reset gazebo_goals node)")
         time.sleep(1.0)
 

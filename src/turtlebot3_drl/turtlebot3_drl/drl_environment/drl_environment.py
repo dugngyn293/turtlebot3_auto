@@ -38,7 +38,7 @@ from ..common.bev import BEVRenderer
 from ..common.settings import ENABLE_BACKWARD, EPISODE_TIMEOUT_SECONDS, ENABLE_MOTOR_NOISE, UNKNOWN, SUCCESS, COLLISION_WALL, COLLISION_OBSTACLE, TIMEOUT, TUMBLE, \
                                 TOPIC_SCAN, TOPIC_VELO, TOPIC_ODOM, ARENA_LENGTH, ARENA_WIDTH, MAX_NUMBER_OBSTACLES, OBSTACLE_RADIUS, LIDAR_DISTANCE_CAP, \
                                     SPEED_LINEAR_MAX, SPEED_ANGULAR_MAX, THRESHOLD_COLLISION, THREHSOLD_GOAL, ENABLE_DYNAMIC_GOALS, ENABLE_BEV_STATE, \
-                                    BEV_IMAGE_SIZE, BEV_STEP_IMAGE_PATH
+                                    BEV_IMAGE_SIZE, BEV_STEP_IMAGE_PATH, EPISODE_RESET_GRACE_STEPS, ROBOT_COLLISION_RADIUS
 
 # Automatically retrievew from Gazebo model configuration (40 by default).
 # Can be set manually if needed.
@@ -67,6 +67,7 @@ class DRLEnvironment(Node):
         self.robot_tilt = 0.0
 
         self.done = False
+        self.episode_active = False
         self.succeed = UNKNOWN
         self.episode_deadline = Infinity
         self.reset_deadline = False
@@ -130,6 +131,7 @@ class DRLEnvironment(Node):
             diff_y = self.robot_y - robot_pos.y
             self.obstacle_distances[obstacle_id] = math.sqrt(diff_y**2 + diff_x**2)
             self.obstacle_positions[obstacle_id] = (robot_pos.x, robot_pos.y)
+            self.check_immediate_obstacle_collision()
         else:
             print("ERROR: received odom was not from obstacle!")
 
@@ -160,6 +162,7 @@ class DRLEnvironment(Node):
 
         self.goal_distance = distance_to_goal
         self.goal_angle = goal_angle
+        self.check_immediate_tumble()
 
     def scan_callback(self, msg):
         if len(msg.ranges) != NUM_SCAN_SAMPLES:
@@ -171,6 +174,7 @@ class DRLEnvironment(Node):
                 if self.scan_ranges[i] < self.obstacle_distance:
                     self.obstacle_distance = self.scan_ranges[i]
         self.obstacle_distance *= LIDAR_DISTANCE_CAP
+        self.check_immediate_wall_collision()
 
     def clock_callback(self, msg):
         self.time_sec = msg.clock.sec
@@ -190,6 +194,12 @@ class DRLEnvironment(Node):
         self.cmd_vel_pub.publish(Twist()) # stop robot
         self.episode_deadline = Infinity
         self.done = True
+        print(
+            f"episode reset requested: outcome={util.translate_outcome(self.succeed)} "
+            f"robot=({self.robot_x:.2f}, {self.robot_y:.2f}) "
+            f"goal=({self.goal_x:.2f}, {self.goal_y:.2f}) "
+            f"goal_distance={self.goal_distance:.2f} obstacle_distance={self.obstacle_distance:.2f}"
+        )
         req = RingGoal.Request()
         req.robot_pose_x = self.robot_x
         req.robot_pose_y = self.robot_y
@@ -204,6 +214,36 @@ class DRLEnvironment(Node):
             while not self.task_fail_client.wait_for_service(timeout_sec=1.0):
                 self.get_logger().info('fail service not available, waiting again...')
             self.task_fail_client.call_async(req)
+
+    def get_collision_outcome(self):
+        for obstacle_distance in self.obstacle_distances:
+            if obstacle_distance < (ROBOT_COLLISION_RADIUS + OBSTACLE_RADIUS):
+                return COLLISION_OBSTACLE
+        return COLLISION_WALL
+
+    def request_immediate_reset(self, outcome):
+        if self.done:
+            return
+        if not self.episode_active:
+            return
+        if self.local_step <= EPISODE_RESET_GRACE_STEPS:
+            return
+        self.succeed = outcome
+        self.stop_reset_robot(outcome == SUCCESS)
+
+    def check_immediate_wall_collision(self):
+        if self.obstacle_distance < THRESHOLD_COLLISION:
+            self.request_immediate_reset(self.get_collision_outcome())
+
+    def check_immediate_obstacle_collision(self):
+        for obstacle_distance in self.obstacle_distances:
+            if obstacle_distance < (ROBOT_COLLISION_RADIUS + OBSTACLE_RADIUS):
+                self.request_immediate_reset(COLLISION_OBSTACLE)
+                return
+
+    def check_immediate_tumble(self):
+        if self.robot_tilt > 0.06 or self.robot_tilt < -0.06:
+            self.request_immediate_reset(TUMBLE)
 
     def get_state(self, action_linear_previous, action_angular_previous):
         if ENABLE_BEV_STATE:
@@ -225,21 +265,14 @@ class DRLEnvironment(Node):
             state.append(float(action_angular_previous))                                        # range: [-1, 1]
         self.local_step += 1
 
-        if self.local_step <= 30: # Grace period to wait for simulation reset
+        if self.local_step <= EPISODE_RESET_GRACE_STEPS: # Grace period to wait for simulation reset
             return state
         # Success
         if self.goal_distance < THREHSOLD_GOAL:
             self.succeed = SUCCESS
         # Collision
         elif self.obstacle_distance < THRESHOLD_COLLISION:
-            dynamic_collision = False
-            for obstacle_distance in self.obstacle_distances:
-                if obstacle_distance < (THRESHOLD_COLLISION + OBSTACLE_RADIUS + 0.05):
-                    dynamic_collision = True
-            if dynamic_collision:
-                self.succeed = COLLISION_OBSTACLE
-            else:
-                self.succeed = COLLISION_WALL
+            self.succeed = self.get_collision_outcome()
         # Timeout
         elif self.time_sec >= self.episode_deadline:
             self.succeed = TIMEOUT
@@ -262,6 +295,8 @@ class DRLEnvironment(Node):
     def step_comm_callback(self, request, response):
         if len(request.action) == 0:
             return self.initalize_episode(response)
+
+        self.episode_active = True
 
         if ENABLE_MOTOR_NOISE:
             request.action[LINEAR] += numpy.clip(numpy.random.normal(0, 0.05), -0.1, 0.1)
@@ -294,6 +329,7 @@ class DRLEnvironment(Node):
             self.total_distance = 0.0
             self.local_step = 0
             self.done = False
+            self.episode_active = False
             self.reset_deadline = True
         if self.local_step % 200 == 0:
             print(f"Rtot: {response.reward:<8.2f}GD: {self.goal_distance:<8.2f}GA: {math.degrees(self.goal_angle):.1f}°\t", end='')

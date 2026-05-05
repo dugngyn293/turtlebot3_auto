@@ -1,0 +1,264 @@
+device = cpu
+simulation_speed = 1
+state_size = 12288
+action_size = 2
+hidden_size = 512
+input_size = 12288
+batch_size = 128
+buffer_size = 1000000
+discount_factor = 0.99
+learning_rate = 0.003
+tau = 0.003
+step_time = 0.01
+loss_function = <function smooth_l1_loss at 0x74f94aeade50>
+epsilon = 1.0
+epsilon_decay = 0.9995
+epsilon_minimum = 0.05
+reward_function = A
+backward_enabled = False
+stacking_enabled = False
+stack_depth = 3
+frame_skip = 4
+networks = [CnnEncoder(
+  (conv): Sequential(
+    (0): Conv2d(3, 32, kernel_size=(4, 4), stride=(2, 2), padding=(1, 1))
+    (1): ELU(alpha=1.0)
+    (2): Conv2d(32, 64, kernel_size=(4, 4), stride=(2, 2), padding=(1, 1))
+    (3): ELU(alpha=1.0)
+    (4): Conv2d(64, 128, kernel_size=(4, 4), stride=(2, 2), padding=(1, 1))
+    (5): ELU(alpha=1.0)
+    (6): AdaptiveAvgPool2d(output_size=(4, 4))
+    (7): Flatten(start_dim=1, end_dim=-1)
+  )
+  (fc): Sequential(
+    (0): Linear(in_features=2048, out_features=512, bias=True)
+    (1): ELU(alpha=1.0)
+    (2): Linear(in_features=512, out_features=256, bias=True)
+    (3): ELU(alpha=1.0)
+  )
+), RSSM(
+  (gru): GRUCell(258, 256)
+  (prior): Sequential(
+    (0): Linear(in_features=256, out_features=512, bias=True)
+    (1): ELU(alpha=1.0)
+    (2): Linear(in_features=512, out_features=256, bias=True)
+  )
+  (posterior): Sequential(
+    (0): Linear(in_features=512, out_features=512, bias=True)
+    (1): ELU(alpha=1.0)
+    (2): Linear(in_features=512, out_features=256, bias=True)
+  )
+), CnnDecoder(
+  (fc): Sequential(
+    (0): Linear(in_features=512, out_features=512, bias=True)
+    (1): ELU(alpha=1.0)
+    (2): Linear(in_features=512, out_features=2048, bias=True)
+    (3): ELU(alpha=1.0)
+  )
+  (deconv): Sequential(
+    (0): ConvTranspose2d(128, 64, kernel_size=(4, 4), stride=(2, 2), padding=(1, 1))
+    (1): ELU(alpha=1.0)
+    (2): ConvTranspose2d(64, 32, kernel_size=(4, 4), stride=(2, 2), padding=(1, 1))
+    (3): ELU(alpha=1.0)
+    (4): ConvTranspose2d(32, 3, kernel_size=(4, 4), stride=(2, 2), padding=(1, 1))
+  )
+), RewardHead(
+  (net): Sequential(
+    (0): Linear(in_features=512, out_features=512, bias=True)
+    (1): ELU(alpha=1.0)
+    (2): Linear(in_features=512, out_features=512, bias=True)
+    (3): ELU(alpha=1.0)
+    (4): Linear(in_features=512, out_features=255, bias=True)
+  )
+), ContinueHead(
+  (net): Sequential(
+    (0): Linear(in_features=512, out_features=512, bias=True)
+    (1): ELU(alpha=1.0)
+    (2): Linear(in_features=512, out_features=1, bias=True)
+  )
+), Actor(
+  (backbone): Sequential(
+    (0): Linear(in_features=512, out_features=512, bias=True)
+    (1): ELU(alpha=1.0)
+    (2): Linear(in_features=512, out_features=512, bias=True)
+    (3): ELU(alpha=1.0)
+  )
+  (mean): Linear(in_features=512, out_features=2, bias=True)
+  (std): Linear(in_features=512, out_features=2, bias=True)
+), Critic(
+  (net): Sequential(
+    (0): Linear(in_features=512, out_features=512, bias=True)
+    (1): ELU(alpha=1.0)
+    (2): Linear(in_features=512, out_features=512, bias=True)
+    (3): ELU(alpha=1.0)
+    (4): Linear(in_features=512, out_features=255, bias=True)
+  )
+), Critic(
+  (net): Sequential(
+    (0): Linear(in_features=512, out_features=512, bias=True)
+    (1): ELU(alpha=1.0)
+    (2): Linear(in_features=512, out_features=512, bias=True)
+    (3): ELU(alpha=1.0)
+    (4): Linear(in_features=512, out_features=255, bias=True)
+  )
+)]
+iteration = 0
+image_size = 64
+image_channels = 3
+observe_steps = 5000
+sequence_length = 16
+horizon = 15
+embed_size = 256
+deter_size = 256
+stoch_size = 16
+stoch_classes = 16
+num_bins = 255
+free_bits = 1.0
+kl_coef = 0.5
+lam = 0.95
+entropy_coef = 0.0003
+actor_lr = 3e-05
+critic_lr = 3e-05
+world_lr = 0.0001
+bins = tensor([-2.0000e+01, -1.9843e+01, -1.9685e+01, -1.9528e+01, -1.9370e+01,
+        -1.9213e+01, -1.9055e+01, -1.8898e+01, -1.8740e+01, -1.8583e+01,
+        -1.8425e+01, -1.8268e+01, -1.8110e+01, -1.7953e+01, -1.7795e+01,
+        -1.7638e+01, -1.7480e+01, -1.7323e+01, -1.7165e+01, -1.7008e+01,
+        -1.6850e+01, -1.6693e+01, -1.6535e+01, -1.6378e+01, -1.6220e+01,
+        -1.6063e+01, -1.5906e+01, -1.5748e+01, -1.5591e+01, -1.5433e+01,
+        -1.5276e+01, -1.5118e+01, -1.4961e+01, -1.4803e+01, -1.4646e+01,
+        -1.4488e+01, -1.4331e+01, -1.4173e+01, -1.4016e+01, -1.3858e+01,
+        -1.3701e+01, -1.3543e+01, -1.3386e+01, -1.3228e+01, -1.3071e+01,
+        -1.2913e+01, -1.2756e+01, -1.2598e+01, -1.2441e+01, -1.2283e+01,
+        -1.2126e+01, -1.1969e+01, -1.1811e+01, -1.1654e+01, -1.1496e+01,
+        -1.1339e+01, -1.1181e+01, -1.1024e+01, -1.0866e+01, -1.0709e+01,
+        -1.0551e+01, -1.0394e+01, -1.0236e+01, -1.0079e+01, -9.9213e+00,
+        -9.7638e+00, -9.6063e+00, -9.4488e+00, -9.2913e+00, -9.1339e+00,
+        -8.9764e+00, -8.8189e+00, -8.6614e+00, -8.5039e+00, -8.3465e+00,
+        -8.1890e+00, -8.0315e+00, -7.8740e+00, -7.7165e+00, -7.5591e+00,
+        -7.4016e+00, -7.2441e+00, -7.0866e+00, -6.9291e+00, -6.7717e+00,
+        -6.6142e+00, -6.4567e+00, -6.2992e+00, -6.1417e+00, -5.9843e+00,
+        -5.8268e+00, -5.6693e+00, -5.5118e+00, -5.3543e+00, -5.1969e+00,
+        -5.0394e+00, -4.8819e+00, -4.7244e+00, -4.5669e+00, -4.4094e+00,
+        -4.2520e+00, -4.0945e+00, -3.9370e+00, -3.7795e+00, -3.6220e+00,
+        -3.4646e+00, -3.3071e+00, -3.1496e+00, -2.9921e+00, -2.8346e+00,
+        -2.6772e+00, -2.5197e+00, -2.3622e+00, -2.2047e+00, -2.0472e+00,
+        -1.8898e+00, -1.7323e+00, -1.5748e+00, -1.4173e+00, -1.2598e+00,
+        -1.1024e+00, -9.4488e-01, -7.8740e-01, -6.2992e-01, -4.7244e-01,
+        -3.1496e-01, -1.5748e-01, -1.1921e-07,  1.5748e-01,  3.1496e-01,
+         4.7244e-01,  6.2992e-01,  7.8740e-01,  9.4488e-01,  1.1024e+00,
+         1.2598e+00,  1.4173e+00,  1.5748e+00,  1.7323e+00,  1.8898e+00,
+         2.0472e+00,  2.2047e+00,  2.3622e+00,  2.5197e+00,  2.6772e+00,
+         2.8346e+00,  2.9921e+00,  3.1496e+00,  3.3071e+00,  3.4646e+00,
+         3.6220e+00,  3.7795e+00,  3.9370e+00,  4.0945e+00,  4.2520e+00,
+         4.4094e+00,  4.5669e+00,  4.7244e+00,  4.8819e+00,  5.0394e+00,
+         5.1969e+00,  5.3543e+00,  5.5118e+00,  5.6693e+00,  5.8268e+00,
+         5.9843e+00,  6.1417e+00,  6.2992e+00,  6.4567e+00,  6.6142e+00,
+         6.7717e+00,  6.9291e+00,  7.0866e+00,  7.2441e+00,  7.4016e+00,
+         7.5591e+00,  7.7165e+00,  7.8740e+00,  8.0315e+00,  8.1890e+00,
+         8.3465e+00,  8.5039e+00,  8.6614e+00,  8.8189e+00,  8.9764e+00,
+         9.1339e+00,  9.2913e+00,  9.4488e+00,  9.6063e+00,  9.7638e+00,
+         9.9213e+00,  1.0079e+01,  1.0236e+01,  1.0394e+01,  1.0551e+01,
+         1.0709e+01,  1.0866e+01,  1.1024e+01,  1.1181e+01,  1.1339e+01,
+         1.1496e+01,  1.1654e+01,  1.1811e+01,  1.1969e+01,  1.2126e+01,
+         1.2283e+01,  1.2441e+01,  1.2598e+01,  1.2756e+01,  1.2913e+01,
+         1.3071e+01,  1.3228e+01,  1.3386e+01,  1.3543e+01,  1.3701e+01,
+         1.3858e+01,  1.4016e+01,  1.4173e+01,  1.4331e+01,  1.4488e+01,
+         1.4646e+01,  1.4803e+01,  1.4961e+01,  1.5118e+01,  1.5276e+01,
+         1.5433e+01,  1.5591e+01,  1.5748e+01,  1.5906e+01,  1.6063e+01,
+         1.6220e+01,  1.6378e+01,  1.6535e+01,  1.6693e+01,  1.6850e+01,
+         1.7008e+01,  1.7165e+01,  1.7323e+01,  1.7480e+01,  1.7638e+01,
+         1.7795e+01,  1.7953e+01,  1.8110e+01,  1.8268e+01,  1.8425e+01,
+         1.8583e+01,  1.8740e+01,  1.8898e+01,  1.9055e+01,  1.9213e+01,
+         1.9370e+01,  1.9528e+01,  1.9685e+01,  1.9843e+01,  2.0000e+01])
+encoder = CnnEncoder(
+  (conv): Sequential(
+    (0): Conv2d(3, 32, kernel_size=(4, 4), stride=(2, 2), padding=(1, 1))
+    (1): ELU(alpha=1.0)
+    (2): Conv2d(32, 64, kernel_size=(4, 4), stride=(2, 2), padding=(1, 1))
+    (3): ELU(alpha=1.0)
+    (4): Conv2d(64, 128, kernel_size=(4, 4), stride=(2, 2), padding=(1, 1))
+    (5): ELU(alpha=1.0)
+    (6): AdaptiveAvgPool2d(output_size=(4, 4))
+    (7): Flatten(start_dim=1, end_dim=-1)
+  )
+  (fc): Sequential(
+    (0): Linear(in_features=2048, out_features=512, bias=True)
+    (1): ELU(alpha=1.0)
+    (2): Linear(in_features=512, out_features=256, bias=True)
+    (3): ELU(alpha=1.0)
+  )
+)
+rssm = RSSM(
+  (gru): GRUCell(258, 256)
+  (prior): Sequential(
+    (0): Linear(in_features=256, out_features=512, bias=True)
+    (1): ELU(alpha=1.0)
+    (2): Linear(in_features=512, out_features=256, bias=True)
+  )
+  (posterior): Sequential(
+    (0): Linear(in_features=512, out_features=512, bias=True)
+    (1): ELU(alpha=1.0)
+    (2): Linear(in_features=512, out_features=256, bias=True)
+  )
+)
+decoder = CnnDecoder(
+  (fc): Sequential(
+    (0): Linear(in_features=512, out_features=512, bias=True)
+    (1): ELU(alpha=1.0)
+    (2): Linear(in_features=512, out_features=2048, bias=True)
+    (3): ELU(alpha=1.0)
+  )
+  (deconv): Sequential(
+    (0): ConvTranspose2d(128, 64, kernel_size=(4, 4), stride=(2, 2), padding=(1, 1))
+    (1): ELU(alpha=1.0)
+    (2): ConvTranspose2d(64, 32, kernel_size=(4, 4), stride=(2, 2), padding=(1, 1))
+    (3): ELU(alpha=1.0)
+    (4): ConvTranspose2d(32, 3, kernel_size=(4, 4), stride=(2, 2), padding=(1, 1))
+  )
+)
+reward_head = RewardHead(
+  (net): Sequential(
+    (0): Linear(in_features=512, out_features=512, bias=True)
+    (1): ELU(alpha=1.0)
+    (2): Linear(in_features=512, out_features=512, bias=True)
+    (3): ELU(alpha=1.0)
+    (4): Linear(in_features=512, out_features=255, bias=True)
+  )
+)
+continue_head = ContinueHead(
+  (net): Sequential(
+    (0): Linear(in_features=512, out_features=512, bias=True)
+    (1): ELU(alpha=1.0)
+    (2): Linear(in_features=512, out_features=1, bias=True)
+  )
+)
+world_optimizer = Adam (
+Parameter Group 0
+    amsgrad: False
+    betas: (0.9, 0.999)
+    eps: 1e-05
+    lr: 0.0001
+    weight_decay: 0
+)
+actor_optimizer = Adam (
+Parameter Group 0
+    amsgrad: False
+    betas: (0.9, 0.999)
+    eps: 1e-05
+    lr: 3e-05
+    weight_decay: 0
+)
+critic_optimizer = Adam (
+Parameter Group 0
+    amsgrad: False
+    betas: (0.9, 0.999)
+    eps: 1e-05
+    lr: 3e-05
+    weight_decay: 0
+)
+return_normalizer = <turtlebot3_drl.drl_agent.dreamerv3.ReturnNormalizer object at 0x74f85d03f940>
+_h = None
+_z = None
+_last_action = None
+

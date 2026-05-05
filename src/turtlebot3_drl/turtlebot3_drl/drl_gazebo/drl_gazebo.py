@@ -50,6 +50,7 @@ class DRLGazebo(Node):
         self.entity_path = os.path.join(self.entity_dir_path, 'model.sdf')
         self.entity = open(self.entity_path, 'r').read()
         self.entity_name = 'goal'
+        self.entity_counter = 0
 
         with open('/tmp/drlnav_current_stage.txt', 'r') as f:
             self.stage = int(f.read())
@@ -98,6 +99,8 @@ class DRLGazebo(Node):
 
     def task_succeed_callback(self, request, response):
         self.delete_entity()
+        self.reset_simulation()
+        time.sleep(0.3)
         if ENABLE_TRUE_RANDOM_GOALS:
             self.generate_random_goal()
             print(f"success: generate (random) a new goal, goal pose: {self.goal_x:.2f}, {self.goal_y:.2f}")
@@ -112,6 +115,7 @@ class DRLGazebo(Node):
     def task_fail_callback(self, request, response):
         self.delete_entity()
         self.reset_simulation()
+        time.sleep(0.3)
         if ENABLE_TRUE_RANDOM_GOALS:
             self.generate_random_goal()
             print(f"fail: reset the environment, (random) goal pose: {self.goal_x:.2f}, {self.goal_y:.2f}")
@@ -213,25 +217,54 @@ class DRLGazebo(Node):
         while not self.reset_simulation_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('reset service not available, waiting again...')
         self.reset_simulation_client.call_async(req)
+        self.pause_simulation()
+
+    def pause_simulation(self):
+        req = Empty.Request()
+        while not self.gazebo_pause.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('pause gazebo service not available, waiting again...')
+        self.gazebo_pause.call_async(req)
 
     def delete_entity(self):
         req = DeleteEntity.Request()
         req.name = self.entity_name
         while not self.delete_entity_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('service not available, waiting again...')
-        self.delete_entity_client.call_async(req)
+        future = self.delete_entity_client.call_async(req)
+        future.add_done_callback(self._log_delete_result)
 
     def spawn_entity(self):
         goal_pose = Pose()
         goal_pose.position.x = self.goal_x
         goal_pose.position.y = self.goal_y
         req = SpawnEntity.Request()
+        self.entity_counter += 1
+        self.entity_name = f'goal_{self.entity_counter}'
         req.name = self.entity_name
         req.xml = self.entity
         req.initial_pose = goal_pose
         while not self.spawn_entity_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('service not available, waiting again...')
-        self.spawn_entity_client.call_async(req)
+        future = self.spawn_entity_client.call_async(req)
+        future.add_done_callback(self._log_spawn_result)
+
+    def _log_delete_result(self, future):
+        try:
+            result = future.result()
+            if result and not result.success:
+                print(f"delete goal warning: {result.status_message}")
+        except Exception as exc:
+            print(f"delete goal failed: {exc}")
+
+    def _log_spawn_result(self, future):
+        try:
+            result = future.result()
+            if result and result.success:
+                print(f"spawned {self.entity_name} at {self.goal_x:.2f}, {self.goal_y:.2f}")
+            elif result:
+                print(f"spawn goal failed: {result.status_message}")
+        except Exception as exc:
+            print(f"spawn goal failed: {exc}")
 
     def get_obstacle_coordinates(self):
         tree = ET.parse(os.getenv('DRLNAV_BASE_PATH') + '/src/turtlebot3_simulations/turtlebot3_gazebo/models/turtlebot3_drl_world/inner_walls/model.sdf')
