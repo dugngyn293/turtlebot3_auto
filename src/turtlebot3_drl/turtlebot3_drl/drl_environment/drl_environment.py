@@ -35,10 +35,11 @@ from rclpy.qos import QoSProfile, qos_profile_sensor_data
 from . import reward as rw
 from ..common import utilities as util
 from ..common.bev import BEVRenderer
+from ..common.lidar_accumulator import BEVAccumulator
 from ..common.settings import ENABLE_BACKWARD, EPISODE_TIMEOUT_SECONDS, ENABLE_MOTOR_NOISE, UNKNOWN, SUCCESS, COLLISION_WALL, COLLISION_OBSTACLE, TIMEOUT, TUMBLE, \
                                 TOPIC_SCAN, TOPIC_VELO, TOPIC_ODOM, ARENA_LENGTH, ARENA_WIDTH, MAX_NUMBER_OBSTACLES, OBSTACLE_RADIUS, LIDAR_DISTANCE_CAP, \
                                     SPEED_LINEAR_MAX, SPEED_ANGULAR_MAX, THRESHOLD_COLLISION, THREHSOLD_GOAL, ENABLE_DYNAMIC_GOALS, ENABLE_BEV_STATE, \
-                                    BEV_IMAGE_SIZE, BEV_STEP_IMAGE_PATH, EPISODE_RESET_GRACE_STEPS, ROBOT_COLLISION_RADIUS
+                                    BEV_DECAY_FACTOR, BEV_IMAGE_SIZE, BEV_RESOLUTION, BEV_STEP_IMAGE_PATH, EPISODE_RESET_GRACE_STEPS, ROBOT_COLLISION_RADIUS
 
 # Automatically retrievew from Gazebo model configuration (40 by default).
 # Can be set manually if needed.
@@ -84,6 +85,12 @@ class DRLEnvironment(Node):
         self.scan_ranges = [LIDAR_DISTANCE_CAP] * NUM_SCAN_SAMPLES
         self.obstacle_distance = LIDAR_DISTANCE_CAP
         self.bev_renderer = BEVRenderer(BEV_IMAGE_SIZE, ARENA_LENGTH, ARENA_WIDTH)
+        self.bev_accumulator = BEVAccumulator(
+            grid_size=BEV_IMAGE_SIZE,
+            resolution=BEV_RESOLUTION,
+            decay=BEV_DECAY_FACTOR,
+        )
+        self.latest_lidar_points_map = numpy.zeros((0, 2), dtype=numpy.float32)
 
         self.difficulty_radius = 1
         self.local_step = 0
@@ -169,10 +176,19 @@ class DRLEnvironment(Node):
             print(f"more or less scans than expected! check model.sdf, got: {len(msg.ranges)}, expected: {NUM_SCAN_SAMPLES}")
         # normalize laser values
         self.obstacle_distance = 1
+        points = []
         for i in range(NUM_SCAN_SAMPLES):
-                self.scan_ranges[i] = numpy.clip(float(msg.ranges[i]) / LIDAR_DISTANCE_CAP, 0, 1)
+                scan_range = float(msg.ranges[i])
+                self.scan_ranges[i] = numpy.clip(scan_range / LIDAR_DISTANCE_CAP, 0, 1)
                 if self.scan_ranges[i] < self.obstacle_distance:
                     self.obstacle_distance = self.scan_ranges[i]
+                if math.isfinite(scan_range) and 0.0 < scan_range < LIDAR_DISTANCE_CAP:
+                    angle = msg.angle_min + i * msg.angle_increment + self.robot_heading
+                    points.append((
+                        self.robot_x + scan_range * math.cos(angle),
+                        self.robot_y + scan_range * math.sin(angle),
+                    ))
+        self.latest_lidar_points_map = numpy.asarray(points, dtype=numpy.float32).reshape(-1, 2)
         self.obstacle_distance *= LIDAR_DISTANCE_CAP
         self.check_immediate_wall_collision()
 
@@ -247,16 +263,22 @@ class DRLEnvironment(Node):
 
     def get_state(self, action_linear_previous, action_angular_previous):
         if ENABLE_BEV_STATE:
-            image = self.bev_renderer.render(
-                self.robot_x,
-                self.robot_y,
-                self.robot_heading,
-                self.goal_x,
-                self.goal_y,
-                self.obstacle_positions,
+            robot_pose = numpy.asarray(
+                [self.robot_x, self.robot_y, self.robot_heading],
+                dtype=numpy.float32,
             )
-            self.bev_renderer.save_png(BEV_STEP_IMAGE_PATH, image)
-            state = self.bev_renderer.flatten(image)
+            goal_pose = numpy.asarray([self.goal_x, self.goal_y, 0.0], dtype=numpy.float32)
+            self.bev_accumulator.update(
+                lidar_points_map=self.latest_lidar_points_map,
+                robot_pose=robot_pose,
+            )
+            bev_tensor = self.bev_accumulator.get_tensor(robot_pose, goal_pose)
+            preview = numpy.stack(
+                [bev_tensor[1], bev_tensor[3], bev_tensor[2]],
+                axis=-1,
+            )
+            self.bev_renderer.save_png(BEV_STEP_IMAGE_PATH, preview)
+            state = bev_tensor.reshape(-1).astype(numpy.float32).tolist()
         else:
             state = copy.deepcopy(self.scan_ranges)                                             # range: [ 0, 1]
             state.append(float(numpy.clip((self.goal_distance / MAX_GOAL_DISTANCE), 0, 1)))     # range: [ 0, 1]
@@ -331,6 +353,7 @@ class DRLEnvironment(Node):
             self.done = False
             self.episode_active = False
             self.reset_deadline = True
+            self.bev_accumulator.reset()
         if self.local_step % 200 == 0:
             print(f"Rtot: {response.reward:<8.2f}GD: {self.goal_distance:<8.2f}GA: {math.degrees(self.goal_angle):.1f}°\t", end='')
             print(f"MinD: {self.obstacle_distance:<8.2f}Alin: {request.action[LINEAR]:<7.1f}Aturn: {request.action[ANGULAR]:<7.1f}")

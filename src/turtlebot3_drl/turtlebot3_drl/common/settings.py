@@ -11,7 +11,11 @@ ENABLE_VISUAL            = False    # Meant to be used only during evaluation/te
 ENABLE_TRUE_RANDOM_GOALS = False    # If false, goals are selected semi-randomly from a list of known valid goal positions
 ENABLE_DYNAMIC_GOALS     = False    # If true, goal difficulty (distance) is adapted according to current success rate
 ENABLE_BEV_STATE         = True     # If true, DRL environment returns a BEV image state instead of LiDAR samples
-BEV_IMAGE_SIZE           = 64       # Width and height of the square BEV image passed to DreamerV3
+BEV_IMAGE_SIZE           = 48       # Width and height of the square BEV image passed to DreamerV3
+BEV_GRID_SIZE            = BEV_IMAGE_SIZE
+BEV_IMAGE_CHANNELS       = 4        # wall, dynamic trail, robot, goal
+BEV_RESOLUTION           = 0.05     # metres per pixel
+BEV_DECAY_FACTOR         = 0.85     # dynamic trail fading factor per step
 BEV_MEDIA_DIR            = os.path.join(os.getenv('DRLNAV_BASE_PATH', os.getcwd()), 'media')
 BEV_STEP_IMAGE_PATH      = os.path.join(BEV_MEDIA_DIR, 'turtlebot3_drl_bev_latest_step.png')
 BEV_BATCH_IMAGE_PATH     = os.path.join(BEV_MEDIA_DIR, 'turtlebot3_drl_bev_latest_batch.png')
@@ -33,16 +37,18 @@ TOPIC_VELO = 'cmd_vel'
 TOPIC_ODOM = 'odom'
 
 EPISODE_TIMEOUT_SECONDS     = 50    # Number of seconds after which episode timeout occurs
+EPISODE_RESET_GRACE_STEPS   = 10    # Sensor steps ignored after simulation reset
 ARENA_LENGTH                = 4.2   # meters
 ARENA_WIDTH                 = 4.2   # meters
 SPEED_LINEAR_MAX            = 0.22  # m/s
 SPEED_ANGULAR_MAX           = 2.0   # rad/s
 
 LIDAR_DISTANCE_CAP          = 3.5   # meters
-THRESHOLD_COLLISION         = 0.13  # meters
-THREHSOLD_GOAL              = 0.20  # meters
+THRESHOLD_COLLISION         = 0.18  # meters
+THREHSOLD_GOAL              = 0.35  # meters
 
 OBSTACLE_RADIUS             = 0.16  # meters
+ROBOT_COLLISION_RADIUS      = 0.11  # meters
 MAX_NUMBER_OBSTACLES        = 6
 ENABLE_MOTOR_NOISE          = False # Add normally distributed noise to motor output to simulate hardware imperfections
 

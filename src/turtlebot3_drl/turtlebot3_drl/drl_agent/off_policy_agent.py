@@ -15,6 +15,10 @@
 # Authors: Tomas
 
 from abc import ABC, abstractmethod
+import random
+from typing import Optional
+
+import numpy as np
 import torch
 import torch.nn.functional as torchf
 
@@ -133,3 +137,65 @@ class Network(torch.nn.Module, ABC):
             # --- define weights initialization here (optional) ---
             torch.nn.init.xavier_uniform_(m.weight)
             m.bias.data.fill_(0.01)
+
+
+class RawLiDARReplayBuffer:
+    """Episode-aware replay buffer for accumulated BEV grid snapshots."""
+
+    def __init__(self, capacity: int, sequence_length: int, batch_size: int = 1):
+        self.capacity = int(capacity)
+        self.sequence_length = int(sequence_length)
+        self.batch_size = int(batch_size)
+        self.episodes = []
+        self.total_steps = 0
+        self._current_episode = []
+
+    def add(self, wall_grid, dynamic_grid, robot_pose, goal_pose,
+            action, reward, done):
+        transition = {
+            'wall_grid': np.asarray(wall_grid, dtype=np.float32).copy(),
+            'dynamic_grid': np.asarray(dynamic_grid, dtype=np.float32).copy(),
+            'robot_pose': np.asarray(robot_pose, dtype=np.float32).copy(),
+            'goal_pose': np.asarray(goal_pose, dtype=np.float32).copy(),
+            'action': np.asarray(action, dtype=np.float32).copy(),
+            'reward': float(reward),
+            'done': bool(done),
+        }
+        self._current_episode.append(transition)
+        if done:
+            self._finalize_current_episode()
+
+    def _finalize_current_episode(self):
+        if not self._current_episode:
+            return
+        episode = self._current_episode
+        self.episodes.append(episode)
+        self.total_steps += len(episode)
+        self._current_episode = []
+        self._trim_to_capacity()
+
+    def _trim_to_capacity(self):
+        while self.total_steps > self.capacity and self.episodes:
+            removed = self.episodes.pop(0)
+            self.total_steps -= len(removed)
+
+    def sample_sequence(self, batch_size: int, sequence_length: int) -> Optional[list]:
+        if self.total_steps < sequence_length * 2:
+            return None
+        candidates = [ep for ep in self.episodes if len(ep) >= sequence_length]
+        if not candidates:
+            return None
+
+        sequences = []
+        for _ in range(batch_size):
+            episode = random.choice(candidates)
+            start = random.randint(0, len(episode) - sequence_length)
+            sequences.append(episode[start:start + sequence_length])
+        return sequences
+
+    def __len__(self):
+        return self.total_steps
+
+    @property
+    def is_ready(self) -> bool:
+        return self.total_steps >= self.sequence_length * self.batch_size * 2

@@ -7,7 +7,7 @@
 #   World Model  : RSSM (GRU deterministic + categorical stochastic latent)
 #                  + Encoder/Decoder + RewardHead + ContinueHead
 #   Behavior     : Actor-Critic trained entirely in imagination
-#   Observation  : BEV image (64×64×3) flattened as float32 vector
+#   Observation  : BEV image (48×48×4) flattened as float32 vector
 #                  (ENABLE_BEV_STATE = True in settings.py)
 #
 # Key DreamerV3 innovations included:
@@ -24,11 +24,16 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Optional
 
 from ..common.bev import save_png
+from ..common.lidar_accumulator import BEVAccumulator
 from ..common.settings import (
     BEV_BATCH_IMAGE_PATH,
+    BEV_DECAY_FACTOR,
+    BEV_IMAGE_CHANNELS,
     BEV_IMAGE_SIZE,
+    BEV_RESOLUTION,
     # DreamerV3-specific (added to settings.py)
     DREAMER_SEQUENCE_LENGTH,
     DREAMER_HORIZON,
@@ -49,7 +54,8 @@ from ..common.settings import (
     DREAMER_HIDDEN_SIZE,
     DREAMER_OBSERVE_STEPS,
 )
-from .off_policy_agent import OffPolicyAgent, Network
+from ..drl_utils.bev_reconstructor import BEVReconstructor
+from .off_policy_agent import OffPolicyAgent, Network, RawLiDARReplayBuffer
 
 
 # ========================================================================== #
@@ -98,8 +104,8 @@ class ReturnNormalizer:
 
     def __init__(self, decay: float = 0.99):
         self.decay = decay
-        self.low: float | None = None
-        self.high: float | None = None
+        self.low: Optional[float] = None
+        self.high: Optional[float] = None
 
     def update(self, returns: torch.Tensor) -> None:
         low = torch.quantile(returns.detach().float(), 0.05).item()
@@ -149,7 +155,7 @@ class MLP(nn.Module):
 class CnnEncoder(Network):
     """Convolutional BEV encoder.  BEV image → embedding vector.
 
-    Input: flattened (H*W*C,) float32 image normalised to [0, 1].
+    Input: flattened (C*H*W,) float32 image normalised to [0, 1].
     """
 
     def __init__(self, name: str, state_size: int, action_size: int,
@@ -184,10 +190,9 @@ class CnnEncoder(Network):
         self.apply(super().init_weights)
 
     def forward(self, states: torch.Tensor) -> torch.Tensor:
-        # states shape: (..., H*W*C)
+        # states shape: (..., C*H*W)
         original_shape = states.shape[:-1]
-        imgs = states.reshape(-1, self.image_size, self.image_size, self.image_channels)
-        imgs = imgs.permute(0, 3, 1, 2)               # NHWC → NCHW
+        imgs = states.reshape(-1, self.image_channels, self.image_size, self.image_size)
         embed = self.fc(self.conv(imgs))
         return embed.reshape(*original_shape, -1)
 
@@ -224,7 +229,7 @@ class CnnDecoder(Network):
         imgs = self.deconv(x.reshape(-1, 128, 4, 4))
         imgs = F.interpolate(imgs, size=(self.image_size, self.image_size),
                              mode='bilinear', align_corners=False)
-        imgs = torch.sigmoid(imgs).permute(0, 2, 3, 1)         # NCHW → NHWC
+        imgs = torch.sigmoid(imgs)
         return imgs.reshape(*original_shape, -1)
 
     def loss(self, latents: torch.Tensor, states: torch.Tensor) -> torch.Tensor:
@@ -319,6 +324,9 @@ class RSSM(Network):
         h = self.gru_norm(self.gru(x, h))
         z, _ = self._sample(self.prior(h))
         return h, z
+
+    def forward(self, h, z, action):
+        return self.imagine_step(h, z, action)
 
     def observe_sequence(self, embeds, actions):
         """Process a full (B, T, ...) sequence for world model training."""
@@ -463,7 +471,7 @@ class Critic(Network):
 class DreamerV3(OffPolicyAgent):
     """DreamerV3 agent integrated with the turtlebot3_auto framework.
 
-    Observation space: BEV image (BEV_IMAGE_SIZE × BEV_IMAGE_SIZE × 3),
+    Observation space: BEV image (4 × BEV_IMAGE_SIZE × BEV_IMAGE_SIZE),
                        flattened to a float32 vector.  Requires
                        ENABLE_BEV_STATE = True in settings.py.
 
@@ -488,7 +496,7 @@ class DreamerV3(OffPolicyAgent):
 
         # ── Observation / action dimensions ─────────────────────────────── #
         self.image_size = BEV_IMAGE_SIZE
-        self.image_channels = 3
+        self.image_channels = BEV_IMAGE_CHANNELS
         self.state_size = self.image_size * self.image_size * self.image_channels
         self.input_size = self.state_size   # overrides OffPolicyAgent default
 
@@ -511,6 +519,23 @@ class DreamerV3(OffPolicyAgent):
         self.grad_clip = DREAMER_GRAD_CLIP
         self.dreamer_hidden = DREAMER_HIDDEN_SIZE
         self.observe_steps = DREAMER_OBSERVE_STEPS  # overrides OffPolicyAgent
+
+        self.accumulator = BEVAccumulator(
+            grid_size=self.image_size,
+            resolution=BEV_RESOLUTION,
+            decay=BEV_DECAY_FACTOR,
+        )
+        self.reconstructor = BEVReconstructor(
+            grid_size=self.image_size,
+            resolution=BEV_RESOLUTION,
+        )
+        self.raw_buffer = RawLiDARReplayBuffer(
+            capacity=100000,
+            sequence_length=self.sequence_length,
+            batch_size=self.batch_size,
+        )
+        self.current_goal_pose = np.zeros(3, dtype=np.float32)
+        self._last_raw_state = None
 
         # Twohot reward/value bins — in symlog space
         # We put 255 bins between symlog(-20) and symlog(20) ≈ [-3.04, 3.04]
@@ -589,9 +614,9 @@ class DreamerV3(OffPolicyAgent):
 
         # ── Auxiliary training state ──────────────────────────────────────── #
         self.return_normalizer = ReturnNormalizer()
-        self._h: torch.Tensor | None = None
-        self._z: torch.Tensor | None = None
-        self._last_action: torch.Tensor | None = None
+        self._h: Optional[torch.Tensor] = None
+        self._z: Optional[torch.Tensor] = None
+        self._last_action: Optional[torch.Tensor] = None
 
     # ====================================================================== #
     #                      Environment interaction API                        #
@@ -602,12 +627,13 @@ class DreamerV3(OffPolicyAgent):
         self._h = None
         self._z = None
         self._last_action = None
+        self._last_raw_state = None
+        self.accumulator.reset()
 
     def get_action_random(self) -> list:
-        """Return a random action (used during observe phase)."""
-        self.reset_state()
-        return [float(np.clip(np.random.uniform(-1.0, 1.0), -1.0, 1.0))
-                for _ in range(self.action_size)]
+        """Return a random observe-phase action, matching TD3's behavior."""
+        value = np.clip(np.random.uniform(-1.0, 1.0), -1.0, 1.0)
+        return [float(value)] * self.action_size
 
     @torch.no_grad()
     def get_action(self, state, is_training: bool,
@@ -620,8 +646,29 @@ class DreamerV3(OffPolicyAgent):
         if step == 0:
             self.reset_state()
 
-        state_t = torch.from_numpy(np.asarray(state, dtype=np.float32)) \
-                       .to(self.device).unsqueeze(0)
+        if isinstance(state, dict):
+            self.accumulator.update(
+                lidar_points_map=state['lidar_points_map'],
+                robot_pose=state['robot_pose'],
+                static_map=state.get('static_map'),
+            )
+            bev_tensor = self.accumulator.get_tensor(
+                robot_pose=state['robot_pose'],
+                goal_pose=state['goal_pose'],
+            )
+            raw_state = self.accumulator.get_raw_state()
+            raw_state['robot_pose'] = np.asarray(
+                state['robot_pose'], dtype=np.float32
+            ).copy()
+            raw_state['goal_pose'] = np.asarray(
+                state['goal_pose'], dtype=np.float32
+            ).copy()
+            self._last_raw_state = raw_state
+            state_array = bev_tensor.reshape(-1)
+        else:
+            state_array = np.asarray(state, dtype=np.float32)
+
+        state_t = torch.from_numpy(state_array).to(self.device).unsqueeze(0)
 
         if self._h is None:
             self._h, self._z = self.rssm.initial_state(1, self.device)
@@ -642,7 +689,17 @@ class DreamerV3(OffPolicyAgent):
         return action.squeeze(0).clamp(-1.0, 1.0).cpu().numpy().tolist()
 
     def train(self, state, action, reward, state_next, done) -> list:
-        """Step-level train hook (DreamerV3 uses batch training via _train)."""
+        """Step-level hook for raw accumulated-BEV replay."""
+        if self._last_raw_state is not None:
+            self.raw_buffer.add(
+                wall_grid=self._last_raw_state['wall_grid'],
+                dynamic_grid=self._last_raw_state['dynamic_grid'],
+                robot_pose=self._last_raw_state['robot_pose'],
+                goal_pose=self._last_raw_state['goal_pose'],
+                action=np.asarray(action, dtype=np.float32),
+                reward=float(reward),
+                done=bool(done),
+            )
         return [0.0, 0.0]
 
     # ====================================================================== #
@@ -655,11 +712,33 @@ class DreamerV3(OffPolicyAgent):
         Returns [world_loss + critic_loss, actor_loss] to match the
         (loss_critic, loss_actor) signature expected by DrlAgent.
         """
-        batch = replaybuffer.sample_sequence(self.batch_size, self.sequence_length)
-        if batch is None:
-            return [0.0, 0.0]
-
-        obs, actions, rewards, next_obs, dones = batch
+        if self.raw_buffer.is_ready:
+            raw_sequences = self.raw_buffer.sample_sequence(
+                self.batch_size, self.sequence_length
+            )
+            if raw_sequences is None:
+                return [0.0, 0.0]
+            obs = self.reconstructor.reconstruct_batch(raw_sequences)
+            actions = np.asarray(
+                [[step['action'] for step in seq] for seq in raw_sequences],
+                dtype=np.float32,
+            )
+            rewards = np.asarray(
+                [[step['reward'] for step in seq] for seq in raw_sequences],
+                dtype=np.float32,
+            )
+            dones = np.asarray(
+                [[step['done'] for step in seq] for seq in raw_sequences],
+                dtype=np.float32,
+            )
+            next_obs = np.concatenate([obs[:, 1:, :], obs[:, -1:, :]], axis=1)
+        else:
+            batch = replaybuffer.sample_sequence(
+                self.batch_size, self.sequence_length
+            )
+            if batch is None:
+                return [0.0, 0.0]
+            obs, actions, rewards, next_obs, dones = batch
 
         # Save a preview image for debugging (latest BEV in the batch)
         self._save_latest_batch_image(next_obs)
@@ -818,8 +897,13 @@ class DreamerV3(OffPolicyAgent):
     def _save_latest_batch_image(self, batch_states: np.ndarray) -> None:
         """Write the most-recent BEV frame from the batch to disk for inspection."""
         img = batch_states[0, -1].reshape(
-            self.image_size, self.image_size, self.image_channels
+            self.image_channels, self.image_size, self.image_size
         )
+        if self.image_channels == 4:
+            rgb = np.stack([img[1], img[3], img[2]], axis=-1)
+            img = np.clip(rgb, 0.0, 1.0)
+        else:
+            img = np.moveaxis(img, 0, -1)
         save_png(BEV_BATCH_IMAGE_PATH,
                  np.clip(img * 255.0, 0, 255).astype(np.uint8))
 
